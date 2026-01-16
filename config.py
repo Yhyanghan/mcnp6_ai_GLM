@@ -1,7 +1,15 @@
 import os
+import sys
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+if getattr(sys, 'frozen', False):
+    application_path = Path(sys.executable).parent
+else:
+    application_path = Path(__file__).parent
+
+env_file = application_path / '.env'
+load_dotenv(env_file)
 
 class Config:
     MCNP6_PATH = os.getenv('MCNP6_PATH', 'mcnp6.exe')
@@ -22,6 +30,28 @@ class Config:
     DEFAULT_ENCODING = os.getenv('DEFAULT_ENCODING', 'utf-8')
     AUTO_SAVE_INTERVAL = int(os.getenv('AUTO_SAVE_INTERVAL', '300'))
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+    
+    @classmethod
+    def reload(cls):
+        load_dotenv(env_file, override=True)
+        cls.MCNP6_PATH = os.getenv('MCNP6_PATH', 'mcnp6.exe')
+        cls.MCNP6_CMD = os.getenv('MCNP6_CMD', 'mcnp6')
+        cls.MCNP6_ENV_BAT = os.getenv('MCNP6_ENV_BAT', '')
+        cls.MCNP6_WORKSPACE = os.getenv('MCNP6_WORKSPACE', './workspace')
+        
+        cls.AI_MODE = os.getenv('AI_MODE', 'online')
+        cls.AI_API_KEY = os.getenv('AI_API_KEY', '')
+        cls.AI_API_BASE = os.getenv('AI_API_BASE', 'https://api.openai.com/v1')
+        cls.AI_MODEL = os.getenv('AI_MODEL', 'gpt-4')
+        cls.AI_TEMPERATURE = float(os.getenv('AI_TEMPERATURE', '0.7'))
+        cls.AI_MAX_TOKENS = int(os.getenv('AI_MAX_TOKENS', '2000'))
+        
+        cls.AI_LOCAL_ENDPOINT = os.getenv('AI_LOCAL_ENDPOINT', 'http://localhost:11434/api/generate')
+        cls.AI_LOCAL_MODEL = os.getenv('AI_LOCAL_MODEL', 'llama2')
+        
+        cls.DEFAULT_ENCODING = os.getenv('DEFAULT_ENCODING', 'utf-8')
+        cls.AUTO_SAVE_INTERVAL = int(os.getenv('AUTO_SAVE_INTERVAL', '300'))
+        cls.LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
     
     @classmethod
     def validate(cls):

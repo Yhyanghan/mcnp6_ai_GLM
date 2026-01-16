@@ -4,8 +4,19 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QLabel, QFileDialog, QMessageBox, QTabWidget, QWidget)
 from PyQt5.QtCore import Qt
 import os
+import sys
 import logging
+from pathlib import Path
 from config import Config
+
+def get_app_path():
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).parent
+    else:
+        return Path(__file__).parent
+
+def get_env_file_path():
+    return get_app_path() / '.env'
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +196,7 @@ class AISettingsDialog(QDialog):
             
             env_content = ""
             
-            with open('.env', 'r', encoding='utf-8') as f:
+            with open(str(get_env_file_path()), 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
             new_lines = []
@@ -217,20 +228,14 @@ class AISettingsDialog(QDialog):
                 else:
                     new_lines.append(line)
             
-            with open('.env', 'w', encoding='utf-8') as f:
+            with open(str(get_env_file_path()), 'w', encoding='utf-8') as f:
                 f.writelines(new_lines)
             
             from dotenv import load_dotenv
-            load_dotenv()
+            from config import Config
+            load_dotenv(override=True)
             
-            Config.AI_MODE = mode
-            Config.AI_API_KEY = self.api_key_edit.text().strip()
-            Config.AI_API_BASE = self.api_base_edit.text().strip()
-            Config.AI_MODEL = self.model_edit.text().strip()
-            Config.AI_TEMPERATURE = self.temperature_spin.value()
-            Config.AI_MAX_TOKENS = self.max_tokens_spin.value()
-            Config.AI_LOCAL_ENDPOINT = self.local_endpoint_edit.text().strip()
-            Config.AI_LOCAL_MODEL = self.local_model_edit.text().strip()
+            Config.reload()
             
             QMessageBox.information(self, "成功", "AI设置已保存！")
             self.accept()
@@ -263,7 +268,7 @@ class MCNP6SettingsDialog(QDialog):
         
         self.mcnp6_cmd_edit = QLineEdit()
         self.mcnp6_cmd_edit.setPlaceholderText("C:/MCNP6/mcnp6.exe (仅当使用cmd.exe时需要)")
-        execution_layout.addRow("MCNP6可执行文件:", self.mcnp6_cmd_edit)
+        execution_layout.addRow("MCNP6可执行文件", self.mcnp6_cmd_edit)
         
         browse_cmd_btn = QPushButton("浏览...")
         browse_cmd_btn.clicked.connect(self.browse_mcnp6_cmd)
@@ -271,7 +276,7 @@ class MCNP6SettingsDialog(QDialog):
         
         self.mcnp6_env_bat_edit = QLineEdit()
         self.mcnp6_env_bat_edit.setPlaceholderText("C:/Users/Username/mcnp_env.bat")
-        execution_layout.addRow("环境批处理文件:", self.mcnp6_env_bat_edit)
+        execution_layout.addRow("环境批处理文件", self.mcnp6_env_bat_edit)
         
         browse_env_btn = QPushButton("浏览...")
         browse_env_btn.clicked.connect(self.browse_mcnp6_env_bat)
@@ -323,7 +328,7 @@ class MCNP6SettingsDialog(QDialog):
     
     def browse_mcnp6_path(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择MCNP6执行路径", "", "可执行文件 (*.exe);;所有文件 (*)"
+            self, "选择MCNP6执行路径", "", "可执行文件(*.exe);;所有文件(*)"
         )
         
         if file_path:
@@ -331,7 +336,7 @@ class MCNP6SettingsDialog(QDialog):
     
     def browse_mcnp6_cmd(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择MCNP6可执行文件", "", "可执行文件 (*.exe);;所有文件 (*)"
+            self, "选择MCNP6可执行文件", "", "可执行文件(*.exe);;所有文件(*)"
         )
         
         if file_path:
@@ -347,7 +352,7 @@ class MCNP6SettingsDialog(QDialog):
     
     def browse_mcnp6_env_bat(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择环境批处理文件", "", "批处理文件 (*.bat);;所有文件 (*)"
+            self, "选择环境批处理文件", "", "批处理文件(*.bat);;所有文件(*)"
         )
         
         if file_path:
@@ -438,13 +443,13 @@ class MCNP6SettingsDialog(QDialog):
                         logger.info(f"标准错误前500字符: {result.stderr[:500]}")
                     
                     if result.returncode == 0:
-                        QMessageBox.information(self, "成功", "MCNP6测试成功！\n\nMCNP6能够正常运行。")
+                        QMessageBox.information(self, "成功", "MCNP6测试成功！\n\nMCNP6能够正常运行！")
                     else:
                         error_msg = result.stderr if result.stderr else result.stdout
                         if "bad trouble" in error_msg.lower() or "fatal" in error_msg.lower():
                             QMessageBox.warning(self, "警告", f"MCNP6运行时发生错误：\n{error_msg[:500]}")
                         else:
-                            QMessageBox.information(self, "成功", "MCNP6测试成功！\n\nMCNP6能够正常运行。")
+                            QMessageBox.information(self, "成功", "MCNP6测试成功！\n\nMCNP6能够正常运行！")
                 
                 except subprocess.TimeoutExpired:
                     logger.error("MCNP6测试超时")
@@ -466,7 +471,7 @@ class MCNP6SettingsDialog(QDialog):
                 QMessageBox.warning(self, "警告", "请输入MCNP6执行路径")
                 return
             
-            with open('.env', 'r', encoding='utf-8') as f:
+            with open(str(get_env_file_path()), 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
             new_lines = []
@@ -491,16 +496,14 @@ class MCNP6SettingsDialog(QDialog):
             if not env_bat_line_exists:
                 new_lines.append(f'MCNP6_ENV_BAT={mcnp6_env_bat}\n')
             
-            with open('.env', 'w', encoding='utf-8') as f:
+            with open(str(get_env_file_path()), 'w', encoding='utf-8') as f:
                 f.writelines(new_lines)
             
             from dotenv import load_dotenv
-            load_dotenv()
+            from config import Config
+            load_dotenv(override=True)
             
-            Config.MCNP6_PATH = mcnp6_path
-            Config.MCNP6_CMD = mcnp6_cmd
-            Config.MCNP6_ENV_BAT = mcnp6_env_bat
-            Config.MCNP6_WORKSPACE = workspace
+            Config.reload()
             
             os.makedirs(workspace, exist_ok=True)
             

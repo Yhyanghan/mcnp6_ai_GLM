@@ -904,8 +904,51 @@ class MCNP6AIWindow(QMainWindow):
         dialog.exec_()
         
         if dialog.result() == QDialog.Accepted:
-            self.mcnp6_runner = MCNP6Runner()
-            self.status_bar.showMessage("MCNP6设置已更新")
+            try:
+                # 严格验证MCNP6配置
+                errors = []
+                
+                # 验证MCNP6_PATH
+                if not Config.MCNP6_PATH:
+                    errors.append("MCNP6执行路径不能为空")
+                elif not os.path.exists(Config.MCNP6_PATH):
+                    errors.append(f"MCNP6执行路径不存在: {Config.MCNP6_PATH}")
+                
+                # 验证MCNP6_CMD
+                if 'cmd.exe' in Config.MCNP6_PATH.lower():
+                    if not Config.MCNP6_CMD:
+                        errors.append("MCNP6可执行文件不能为空（使用cmd.exe时需要）")
+                    elif not os.path.exists(Config.MCNP6_CMD):
+                        errors.append(f"MCNP6可执行文件不存在: {Config.MCNP6_CMD}")
+                
+                # 验证MCNP6_ENV_BAT
+                if Config.MCNP6_ENV_BAT:
+                    if not os.path.exists(Config.MCNP6_ENV_BAT):
+                        errors.append(f"环境批处理文件不存在: {Config.MCNP6_ENV_BAT}")
+                
+                # 验证MCNP6_WORKSPACE
+                if not Config.MCNP6_WORKSPACE:
+                    errors.append("工作目录不能为空")
+                
+                if errors:
+                    error_msg = "MCNP6配置验证失败：\n\n"
+                    error_msg += "\n".join(f"• {error}" for error in errors)
+                    error_msg += "\n\n请检查MCNP6设置中的路径是否正确。"
+                    QMessageBox.critical(self, "配置错误", error_msg)
+                    self.status_bar.showMessage("MCNP6设置验证失败")
+                    return
+                
+                # 所有验证通过，创建MCNP6Runner
+                self.mcnp6_runner = MCNP6Runner()
+                self.status_bar.showMessage("MCNP6设置已更新")
+                
+            except Exception as e:
+                QMessageBox.critical(
+                    self, 
+                    "错误", 
+                    f"创建MCNP6运行器时发生错误：\n\n{str(e)}"
+                )
+                self.status_bar.showMessage("MCNP6设置更新失败")
     
     def show_about(self):
         QMessageBox.about(

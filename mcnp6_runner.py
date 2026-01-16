@@ -13,10 +13,12 @@ class MCNP6Runner:
     def __init__(self):
         self.mcnp6_path = Config.MCNP6_PATH
         self.mcnp6_cmd = Config.MCNP6_CMD if hasattr(Config, 'MCNP6_CMD') else None
+        self.mcnp6_env_bat = Config.MCNP6_ENV_BAT if hasattr(Config, 'MCNP6_ENV_BAT') else None
         self.workspace = Path(Config.MCNP6_WORKSPACE)
         self.current_process: Optional[subprocess.Popen] = None
         self._ensure_workspace()
         self._setup_mcnp6_environment()
+        self._validate_config()
     
     def _ensure_workspace(self):
         os.makedirs(self.workspace, exist_ok=True)
@@ -40,7 +42,62 @@ class MCNP6Runner:
             os.environ['DISPLAY'] = ':0.0'
             logger.info("DISPLAY环境变量已设置")
     
+    def _validate_config(self):
+        if 'cmd.exe' in self.mcnp6_path.lower():
+            if not self.mcnp6_cmd:
+                logger.warning("MCNP6_CMD 未设置，将使用默认值 'mcnp6.exe'")
+                logger.warning("请在设置中配置 MCNP6_CMD 为实际的 mcnp6.exe 路径")
+            elif not os.path.exists(self.mcnp6_cmd):
+                logger.error(f"MCNP6 可执行文件不存在: {self.mcnp6_cmd}")
+                logger.error("请在设置中配置正确的 MCNP6_CMD 路径")
+            
+            # 不在初始化时验证环境批处理文件
+            # 只在运行MCNP6时验证
+            if self.mcnp6_env_bat:
+                if not os.path.exists(self.mcnp6_env_bat):
+                    logger.warning(f"环境批处理文件不存在: {self.mcnp6_env_bat}")
+                    logger.warning("运行MCNP6时将直接设置环境变量，不使用环境批处理文件")
+                else:
+                    logger.info(f"环境批处理文件已配置: {self.mcnp6_env_bat}")
+            else:
+                logger.info("环境批处理文件未设置，将直接设置环境变量")
+    
     def run_simulation(self, input_file: str, output_callback: Optional[Callable] = None) -> Dict:
+        # 严格验证配置
+        errors = []
+        
+        # 验证MCNP6_PATH
+        if not self.mcnp6_path:
+            errors.append("MCNP6执行路径不能为空")
+        elif not os.path.exists(self.mcnp6_path):
+            errors.append(f"MCNP6执行路径不存在: {self.mcnp6_path}")
+        
+        # 验证MCNP6_CMD
+        if 'cmd.exe' in self.mcnp6_path.lower():
+            if not self.mcnp6_cmd:
+                errors.append("MCNP6可执行文件不能为空（使用cmd.exe时需要）")
+            elif not os.path.exists(self.mcnp6_cmd):
+                errors.append(f"MCNP6可执行文件不存在: {self.mcnp6_cmd}")
+        
+        # 验证MCNP6_ENV_BAT（严格验证）
+        if self.mcnp6_env_bat:
+            if not os.path.exists(self.mcnp6_env_bat):
+                errors.append(f"环境批处理文件不存在: {self.mcnp6_env_bat}")
+        
+        # 验证MCNP6_WORKSPACE
+        if not os.path.exists(self.workspace):
+            try:
+                os.makedirs(self.workspace, exist_ok=True)
+            except Exception as e:
+                errors.append(f"无法创建工作目录: {self.workspace} ({str(e)})")
+        
+        # 如果有错误，返回失败
+        if errors:
+            error_msg = "MCNP6配置验证失败，无法运行MCNP6：\n\n"
+            error_msg += "\n".join(f"• {error}" for error in errors)
+            logger.error(error_msg)
+            return {"success": False, "error": error_msg}
+        
         input_path = Path(input_file)
         if not input_path.exists():
             return {"success": False, "error": f"输入文件不存在: {input_file}"}
@@ -80,32 +137,48 @@ class MCNP6Runner:
                 output_file_str = str(output_file)
                 runtpe_file_str = str(runtpe_file)
                 
+                # 如果输入文件不在工作目录中，复制到工作目录
+                workspace_input_file = self.workspace / input_filename
+                if input_path != workspace_input_file:
+                    import shutil
+                    shutil.copy2(input_path, workspace_input_file)
+                    logger.info(f"输入文件已复制到工作目录: {workspace_input_file}")
+                
                 # 完全复制用户的快捷方式行为
                 # 1. 使用用户的快捷方式配置：cmd.exe /K + 环境变量 + 起始位置
                 # 先扩展环境变量
                 # 优先使用用户配置的环境批处理文件，如果没有则使用默认位置
-                if hasattr(Config, 'MCNP6_ENV_BAT') and Config.MCNP6_ENV_BAT:
-                    env_bat_path = Config.MCNP6_ENV_BAT
+                if self.mcnp6_env_bat and os.path.exists(self.mcnp6_env_bat):
+                    env_bat_path = self.mcnp6_env_bat
+                    use_env_bat = True
                 else:
-                    # 使用默认位置：用户主目录下的mcnp_env.bat
-                    env_bat_path = os.path.expandvars(r"%HOMEDRIVE%%HOMEPATH%\mcnp_env.bat")
+                    # 如果环境批处理文件不存在，直接设置环境变量
+                    env_bat_path = None
+                    use_env_bat = False
+                    logger.info("环境批处理文件不存在，将直接设置环境变量")
                 
                 # 2. 创建最终的命令：先执行环境变量，然后切换到工作目录，然后执行MCNP6
-                # 添加output和runtpe文件参数，保持窗口打开
-                command_line = f'cd /d "{self.workspace}" && "{mcnp6_executable}" i="{input_filename}" o="{output_file}" r="{runtpe_file}" && pause'
+                # 添加output和runtpe文件参数
+                command_line = f'cd /d "{self.workspace}" && "{mcnp6_executable}" i="{input_filename}" o="{output_file}" r="{runtpe_file}"'
                 
                 # 3. 使用正确的cmd.exe路径格式
                 cmd_path = r"C:\Windows\System32\cmd.exe"
                 
-                logger.info(f"通过CMD启动MCNP6: {cmd_path} /K call '{env_bat_path}' && {command_line}")
-                logger.info(f"环境批处理文件: {env_bat_path}")
+                # 4. 使用shell=True直接执行命令，使用 /C 而不是 /K
+                if use_env_bat:
+                    full_cmd = f'{cmd_path} /C call "{env_bat_path}" && {command_line}'
+                    logger.info(f"通过CMD启动MCNP6: {cmd_path} /C call \"{env_bat_path}\" && {command_line}")
+                    logger.info(f"环境批处理文件: {env_bat_path}")
+                else:
+                    full_cmd = f'{cmd_path} /C {command_line}'
+                    logger.info(f"通过CMD启动MCNP6: {cmd_path} /C {command_line}")
+                    logger.info("不使用环境批处理文件")
+                
                 logger.info(f"工作目录: {self.workspace}")
                 logger.info(f"输入文件: {input_filename}")
                 logger.info(f"完整输入路径: {input_path_str}")
                 
-                # 4. 使用shell=True直接执行命令
-                full_cmd = f'{cmd_path} /K call "{env_bat_path}" && {command_line}'
-                cwd = r"E:\MCNP"
+                cwd = str(self.workspace)
                 use_shell = True
             else:
                 full_cmd = [self.mcnp6_path, f"i={input_path}", f"o={output_file}", f"r={runtpe_file}"]
