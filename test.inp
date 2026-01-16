@@ -1,0 +1,7 @@
+c Simple test case
+1 1 -1.0 -1 imp:p=1
+2 0 1 imp:p=0
+1 so 10
+m1 1001 1.0
+sdef pos=0 erg=1
+nps 10
