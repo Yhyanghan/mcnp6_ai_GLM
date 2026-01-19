@@ -197,6 +197,71 @@ class MCNP6AIWindow(QMainWindow):
         
         self.mcnp6_thread = None
         self.ai_thread = None
+        
+        # 自动保存定时器
+        self.auto_save_timer = None
+        self._setup_auto_save()
+    
+    def _setup_auto_save(self):
+        """设置自动保存定时器"""
+        from PyQt5.QtCore import QTimer
+        self.auto_save_timer = QTimer(self)
+        self.auto_save_timer.timeout.connect(self._auto_save)
+        # 从配置读取自动保存间隔（秒），转换为毫秒
+        interval = Config.AUTO_SAVE_INTERVAL * 1000
+        self.auto_save_timer.start(interval)
+    
+    def _auto_save(self):
+        """自动保存当前文件"""
+        if self.current_file and self.editor_panel.get_content().strip():
+            try:
+                self.editor_panel.save_file()
+                self.status_bar.showMessage(f"已自动保存: {self.current_file}", 3000)
+            except Exception as e:
+                pass  # 静默处理自动保存失败
+    
+    def _cleanup_ai_thread(self):
+        """清理AI线程"""
+        if self.ai_thread is not None:
+            if self.ai_thread.isRunning():
+                self.ai_thread.wait(1000)  # 等待最多1秒
+                if self.ai_thread.isRunning():
+                    self.ai_thread.terminate()
+            self.ai_thread = None
+    
+    def _cleanup_mcnp6_thread(self):
+        """清理MCNP6线程"""
+        if self.mcnp6_thread is not None:
+            if self.mcnp6_thread.isRunning():
+                self.mcnp6_runner.stop_simulation()
+                self.mcnp6_thread.wait(2000)
+            self.mcnp6_thread = None
+    
+    def closeEvent(self, event):
+        """窗口关闭时清理资源"""
+        # 停止自动保存
+        if self.auto_save_timer:
+            self.auto_save_timer.stop()
+        
+        # 清理线程
+        self._cleanup_ai_thread()
+        self._cleanup_mcnp6_thread()
+        
+        # 如果有未保存的更改，询问用户
+        if self.current_file and self.editor_panel.get_content().strip():
+            reply = QMessageBox.question(
+                self, "保存更改",
+                "是否保存当前文件？",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save
+            )
+            if reply == QMessageBox.Save:
+                self.save_file()
+            elif reply == QMessageBox.Cancel:
+                event.ignore()
+                return
+        
+        event.accept()
     
     def setup_ui(self):
         self.setWindowTitle("MCNP6 AI Assistant")
@@ -247,6 +312,12 @@ class MCNP6AIWindow(QMainWindow):
         save_action.setShortcut("Ctrl+S")
         save_action.triggered.connect(self.save_file)
         file_menu.addAction(save_action)
+        
+        file_menu.addSeparator()
+        
+        # 最近文件子菜单
+        self.recent_menu = file_menu.addMenu("最近文件(&R)")
+        self._update_recent_files_menu()
         
         file_menu.addSeparator()
         
@@ -523,6 +594,8 @@ class MCNP6AIWindow(QMainWindow):
                 self.current_file = file_path
                 self.input_file_edit.setText(file_path)
                 self.status_bar.showMessage(f"已打开: {file_path}")
+                Config.add_recent_file(file_path)
+                self._update_recent_files_menu()
             else:
                 QMessageBox.critical(self, "错误", "无法打开文件")
     
@@ -554,6 +627,54 @@ class MCNP6AIWindow(QMainWindow):
             self.input_file_edit.setText(file_path)
             self.editor_panel.load_file(file_path)
             self.current_file = file_path
+            Config.add_recent_file(file_path)
+            self._update_recent_files_menu()
+    
+    def _update_recent_files_menu(self):
+        """更新最近文件菜单"""
+        self.recent_menu.clear()
+        recent_files = Config.get_recent_files()
+        
+        if not recent_files:
+            no_recent = QAction("(无最近文件)", self)
+            no_recent.setEnabled(False)
+            self.recent_menu.addAction(no_recent)
+        else:
+            for i, file_path in enumerate(recent_files):
+                # 显示文件名和序号
+                file_name = os.path.basename(file_path)
+                action = QAction(f"{i+1}. {file_name}", self)
+                action.setStatusTip(file_path)
+                action.setData(file_path)
+                action.triggered.connect(lambda checked, path=file_path: self._open_recent_file(path))
+                self.recent_menu.addAction(action)
+            
+            self.recent_menu.addSeparator()
+            clear_action = QAction("清除最近文件", self)
+            clear_action.triggered.connect(self._clear_recent_files)
+            self.recent_menu.addAction(clear_action)
+    
+    def _open_recent_file(self, file_path):
+        """打开最近文件"""
+        if os.path.exists(file_path):
+            if self.editor_panel.load_file(file_path):
+                self.current_file = file_path
+                self.input_file_edit.setText(file_path)
+                self.status_bar.showMessage(f"已打开: {file_path}")
+                Config.add_recent_file(file_path)
+                self._update_recent_files_menu()
+            else:
+                QMessageBox.critical(self, "错误", "无法打开文件")
+        else:
+            QMessageBox.warning(self, "警告", f"文件不存在: {file_path}")
+            self._update_recent_files_menu()
+    
+    def _clear_recent_files(self):
+        """清除最近文件列表"""
+        Config.RECENT_FILES = ''
+        Config._save_recent_files()
+        self._update_recent_files_menu()
+        self.status_bar.showMessage("已清除最近文件列表")
     
     def analyze_input_file(self):
         content = self.editor_panel.get_content()
@@ -561,6 +682,13 @@ class MCNP6AIWindow(QMainWindow):
         if not content.strip():
             QMessageBox.warning(self, "警告", "请先输入或加载MCNP6输入文件内容")
             return
+        
+        # 检查是否有正在运行的AI任务
+        if self.ai_thread and self.ai_thread.isRunning():
+            QMessageBox.warning(self, "警告", "已有AI任务正在运行，请等待完成")
+            return
+        
+        self._cleanup_ai_thread()
         
         self.tab_widget.setCurrentIndex(1)
         self.ai_output_panel.clear()
@@ -592,6 +720,12 @@ class MCNP6AIWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "请先输入部分MCNP6输入文件内容")
             return
         
+        if self.ai_thread and self.ai_thread.isRunning():
+            QMessageBox.warning(self, "警告", "已有AI任务正在运行，请等待完成")
+            return
+        
+        self._cleanup_ai_thread()
+        
         self.tab_widget.setCurrentIndex(1)
         self.ai_output_panel.clear()
         self.ai_output_panel.set_content("正在补全输入文件，请稍候...")
@@ -621,6 +755,12 @@ class MCNP6AIWindow(QMainWindow):
         if not content.strip():
             QMessageBox.warning(self, "警告", "请先输入或加载MCNP6输入文件内容")
             return
+        
+        if self.ai_thread and self.ai_thread.isRunning():
+            QMessageBox.warning(self, "警告", "已有AI任务正在运行，请等待完成")
+            return
+        
+        self._cleanup_ai_thread()
         
         self.tab_widget.setCurrentIndex(1)
         self.ai_output_panel.clear()
@@ -652,6 +792,11 @@ class MCNP6AIWindow(QMainWindow):
             QMessageBox.warning(self, "警告", "请先输入或加载MCNP6输入文件内容")
             return
         
+        if self.ai_thread and self.ai_thread.isRunning():
+            QMessageBox.warning(self, "警告", "已有AI任务正在运行，请等待完成")
+            return
+        
+        self._cleanup_ai_thread()
         self.editor_panel.clear_marks()
         
         self.tab_widget.setCurrentIndex(1)

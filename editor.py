@@ -6,35 +6,67 @@ from PyQt5.QtGui import (QFont, QTextCharFormat, QColor, QSyntaxHighlighter,
 import re
 
 class MCNP6SyntaxHighlighter(QSyntaxHighlighter):
+    """MCNP6语法高亮器，支持更精确的卡片类型识别"""
+    
     def __init__(self, document):
         super().__init__(document)
-        
         self.highlighting_rules = []
-        
-        keyword_format = QTextCharFormat()
-        keyword_format.setForeground(QColor("#569CD6"))
-        keyword_format.setFontWeight(QFont.Bold)
-        keywords = ['c ', 'C ', 's ', 'S ', 'm ', 'M ', 'f', 'F', 'n', 'N', 'p', 'P', 'e', 'E']
-        for keyword in keywords:
-            self.highlighting_rules.append((re.compile(r'\b' + keyword + r'\b'), keyword_format))
-        
+        self._setup_rules()
+    
+    def _setup_rules(self):
+        # 注释格式 (c 开头的行或 $ 后的内容)
         comment_format = QTextCharFormat()
         comment_format.setForeground(QColor("#6A9955"))
         comment_format.setFontItalic(True)
-        self.highlighting_rules.append((re.compile(r'^\$.*$'), comment_format))
+        self.highlighting_rules.append((re.compile(r'^[cC]\s+.*$', re.MULTILINE), comment_format))
+        self.highlighting_rules.append((re.compile(r'\$.*$'), comment_format))
         
+        # 材料卡片 (m1, M2, mt1等)
+        material_format = QTextCharFormat()
+        material_format.setForeground(QColor("#C586C0"))
+        material_format.setFontWeight(QFont.Bold)
+        self.highlighting_rules.append((re.compile(r'^\s*[mM][tT]?\d+', re.MULTILINE), material_format))
+        
+        # 计数卡片 (f4:n, F5:p, *f8:p,e等)
+        tally_format = QTextCharFormat()
+        tally_format.setForeground(QColor("#DCDCAA"))
+        tally_format.setFontWeight(QFont.Bold)
+        self.highlighting_rules.append((re.compile(r'^\s*\*?[fF][cCmMsStTeE]?\d+:?[npehNPEH,]*', re.MULTILINE), tally_format))
+        
+        # 表面卡片 (数字开头，表面类型如 so, px, cy, rpp等)
+        surface_format = QTextCharFormat()
+        surface_format.setForeground(QColor("#4EC9B0"))
+        surface_types = r'\b(so|sx|sy|sz|s|px|py|pz|p|cx|cy|cz|c\/x|c\/y|c\/z|kx|ky|kz|k\/x|k\/y|k\/z|sq|gq|tx|ty|tz|box|rpp|sph|rcc|rhp|hex|rec|trc|ell|wed|arb)\b'
+        self.highlighting_rules.append((re.compile(surface_types, re.IGNORECASE), surface_format))
+        
+        # 源定义关键字 (sdef及其参数)
+        source_format = QTextCharFormat()
+        source_format.setForeground(QColor("#569CD6"))
+        source_format.setFontWeight(QFont.Bold)
+        source_keywords = r'\b(sdef|pos|erg|dir|vec|par|cel|sur|rad|ext|axs|ara|wgt|eff|tme)\b'
+        self.highlighting_rules.append((re.compile(source_keywords, re.IGNORECASE), source_format))
+        
+        # 重要数据卡关键字
+        datacard_format = QTextCharFormat()
+        datacard_format.setForeground(QColor("#CE9178"))
+        datacard_format.setFontWeight(QFont.Bold)
+        data_keywords = r'\b(nps|ctme|prdmp|print|mode|imp|vol|area|tr|fill|like|but|lat|u|trcl|phys|cut|elpt|tmp|act|fmesh|tmesh|wwg|wwe|wwn|wwp|ext|vect|fcl|pd|dxt|dd|df|dm|de|em|sf|sb|sp|si|sc|ds|fq|fm|fs|sd|fu|ft|tf|cf|cm|e|t|c)\b'
+        self.highlighting_rules.append((re.compile(data_keywords, re.IGNORECASE), datacard_format))
+        
+        # 数值格式 (整数、浮点数、科学计数法)
         number_format = QTextCharFormat()
         number_format.setForeground(QColor("#B5CEA8"))
-        self.highlighting_rules.append((re.compile(r'\b\d+\.?\d*\b'), number_format))
+        self.highlighting_rules.append((re.compile(r'[+-]?\d+\.?\d*[eE]?[+-]?\d*'), number_format))
         
-        card_format = QTextCharFormat()
-        card_format.setForeground(QColor("#4EC9B0"))
-        self.highlighting_rules.append((re.compile(r'^\s*[a-zA-Z]\s*\d+'), card_format))
+        # 粒子类型
+        particle_format = QTextCharFormat()
+        particle_format.setForeground(QColor("#9CDCFE"))
+        self.highlighting_rules.append((re.compile(r'\b(n|p|e|h|\|)\b'), particle_format))
     
     def highlightBlock(self, text):
-        for pattern, format in self.highlighting_rules:
+        for pattern, fmt in self.highlighting_rules:
             for match in pattern.finditer(text):
-                self.setFormat(match.start(), match.end() - match.start(), format)
+                self.setFormat(match.start(), match.end() - match.start(), fmt)
 
 class MCNP6Editor(QPlainTextEdit):
     content_changed = pyqtSignal()

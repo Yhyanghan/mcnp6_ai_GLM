@@ -1,6 +1,7 @@
 import subprocess
 import os
 import logging
+import re
 import psutil
 from typing import Dict, Optional, Callable
 from pathlib import Path
@@ -322,6 +323,13 @@ class MCNP6Runner:
         return errors
     
     def validate_input_file(self, input_file: str) -> Dict:
+        """
+        验证MCNP6输入文件结构
+        MCNP6输入文件由空行分隔的三个部分组成：
+        1. 标题行 + 单元格卡片（Cell Cards）
+        2. 表面卡片（Surface Cards）
+        3. 数据卡片（Data Cards）
+        """
         input_path = Path(input_file)
         if not input_path.exists():
             return {"valid": False, "errors": ["文件不存在"]}
@@ -333,27 +341,60 @@ class MCNP6Runner:
             errors = []
             warnings = []
             
-            lines = content.split('\n')
+            # MCNP6使用空行分隔不同部分
+            # 移除多余的空行，保留结构
+            sections = []
+            current_section = []
             
-            has_cell_card = any(line.strip().startswith('c ') for line in lines)
-            has_surface_card = any(line.strip().startswith('s ') for line in lines)
-            has_material_card = any(line.strip().startswith('m ') for line in lines)
-            has_source_card = any('sdef' in line.lower() for line in lines)
+            for line in content.split('\n'):
+                if line.strip() == '':
+                    if current_section:
+                        sections.append('\n'.join(current_section))
+                        current_section = []
+                else:
+                    current_section.append(line)
             
-            if not has_cell_card:
-                errors.append("缺少单元格卡片（Cell Cards）")
-            if not has_surface_card:
-                errors.append("缺少表面卡片（Surface Cards）")
-            if not has_material_card:
-                errors.append("缺少材料卡片（Material Cards）")
-            if not has_source_card:
-                warnings.append("未找到源定义（SDEF）")
+            if current_section:
+                sections.append('\n'.join(current_section))
             
-            for i, line in enumerate(lines, 1):
-                if line.strip().startswith('$'):
-                    continue
-                if line.strip() and not line.strip()[0].isalpha():
-                    warnings.append(f"第{i}行: 可能的格式问题")
+            # 检查基本结构：至少需要3个部分
+            if len(sections) < 3:
+                errors.append(f"输入文件结构不完整：发现{len(sections)}个部分，MCNP6需要至少3个部分（单元格、表面、数据卡）")
+            
+            # 检查是否有材料定义 (m后跟数字)
+            has_material = bool(re.search(r'^\s*[mM]\d+\s+', content, re.MULTILINE))
+            if not has_material:
+                warnings.append("未找到材料卡片（Material Cards）- 如果单元格使用材料，需要定义材料")
+            
+            # 检查是否有源定义
+            has_source = bool(re.search(r'^\s*sdef\b', content, re.IGNORECASE | re.MULTILINE))
+            if not has_source:
+                warnings.append("未找到源定义（SDEF）- 固定源问题需要定义源")
+            
+            # 检查是否有模式定义
+            has_mode = bool(re.search(r'^\s*mode\s+', content, re.IGNORECASE | re.MULTILINE))
+            if not has_mode:
+                warnings.append("未找到模式定义（MODE）- 建议明确指定粒子类型")
+            
+            # 检查是否有粒子历史数或时间限制
+            has_nps = bool(re.search(r'^\s*nps\s+', content, re.IGNORECASE | re.MULTILINE))
+            has_ctme = bool(re.search(r'^\s*ctme\s+', content, re.IGNORECASE | re.MULTILINE))
+            if not has_nps and not has_ctme:
+                warnings.append("未找到运行控制（NPS或CTME）- 建议指定粒子数或运行时间")
+            
+            # 检查单元格卡片格式（第一部分，跳过标题行）
+            if len(sections) >= 1:
+                cell_section = sections[0].split('\n')
+                if len(cell_section) > 1:  # 跳过标题行
+                    for i, line in enumerate(cell_section[1:], 2):
+                        line_stripped = line.strip()
+                        # 跳过注释行
+                        if line_stripped.startswith('c ') or line_stripped.startswith('C '):
+                            continue
+                        # 单元格卡片应该以数字开头
+                        if line_stripped and not line_stripped[0].isdigit():
+                            if not line_stripped.startswith('$'):
+                                warnings.append(f"第{i}行可能的单元格格式问题：单元格卡片应以数字开头")
             
             result = {
                 "valid": len(errors) == 0,
